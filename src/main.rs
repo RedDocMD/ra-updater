@@ -65,13 +65,14 @@ const RA_BIN_NAME: &str = "rust-analyzer";
 const RA_BIN_DIR: &str = ".local/bin";
 
 fn ra_exists() -> bool {
-    if let Some(mut ra_path) = home::home_dir() {
-        ra_path.push(RA_BIN_DIR);
-        ra_path.push(RA_BIN_NAME);
-        ra_path.exists()
-    } else {
-        false
-    }
+    ra_path().map_or(false, |p| p.exists())
+}
+
+fn ra_path() -> Option<PathBuf> {
+    let mut ra_path = home::home_dir()?;
+    ra_path.push(RA_BIN_DIR);
+    ra_path.push(RA_BIN_NAME);
+    Some(ra_path)
 }
 
 const RA_OWNER: &str = "rust-lang";
