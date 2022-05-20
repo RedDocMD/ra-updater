@@ -5,18 +5,28 @@ use octocrab::models::repos::Release;
 use octocrab::Octocrab;
 use thiserror::Error;
 use tokio::fs::File;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::main]
 async fn main() {
-    let release = match latest_release().await {
+    let latest_release = match latest_release().await {
         Ok(v) => v,
         Err(e) => {
             eprintln!("Failed to get latest release: {}", e);
             process::exit(1);
         }
     };
-    let asset_path = match download_asset(&release).await {
+    let latest_version = latest_release.name.as_ref().unwrap();
+    if let Some(curr_version) = curr_ra_version().await {
+        if latest_version == &curr_version && ra_exists() {
+            eprintln!(
+                "We already have the most current version ({})",
+                latest_version
+            );
+            return;
+        }
+    }
+    let asset_path = match download_asset(&latest_release).await {
         Ok(v) => v,
         Err(e) => {
             eprintln!("Failed to download asset: {}", e);
@@ -38,6 +48,30 @@ enum RaUpdaterError {
 
     #[error("Asset {0} not found")]
     AssetNotFound(String),
+}
+
+const RA_VERSION_FILE: &str = ".ra-version";
+
+async fn curr_ra_version() -> Option<String> {
+    let mut version_file_path = home::home_dir()?;
+    version_file_path.push(RA_VERSION_FILE);
+    let mut version_file = File::open(version_file_path).await.ok()?;
+    let mut version = String::new();
+    version_file.read_to_string(&mut version).await.ok()?;
+    Some(version)
+}
+
+const RA_BIN_NAME: &str = "rust-analyzer";
+const RA_BIN_DIR: &str = ".local/bin";
+
+fn ra_exists() -> bool {
+    if let Some(mut ra_path) = home::home_dir() {
+        ra_path.push(RA_BIN_DIR);
+        ra_path.push(RA_BIN_NAME);
+        ra_path.exists()
+    } else {
+        false
+    }
 }
 
 const RA_OWNER: &str = "rust-lang";
