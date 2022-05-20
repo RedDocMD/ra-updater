@@ -1,11 +1,10 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::{env, process};
 
+use flate2::bufread::GzDecoder;
 use octocrab::models::repos::Release;
 use octocrab::Octocrab;
 use thiserror::Error;
-use tokio::fs::File;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::main]
 async fn main() {
@@ -33,6 +32,14 @@ async fn main() {
             process::exit(1);
         }
     };
+
+    if let Err(err) = deflate_asset(&asset_path) {
+        eprintln!(
+            "Failed to deflate rust-analyzer to correct location: {}",
+            err
+        );
+        process::exit(1);
+    }
 }
 
 #[derive(Debug, Error)]
@@ -48,11 +55,17 @@ enum RaUpdaterError {
 
     #[error("Asset {0} not found")]
     AssetNotFound(String),
+
+    #[error("Rust-analyzer path not obtainable")]
+    RaPathNotObtainable,
 }
 
 const RA_VERSION_FILE: &str = ".ra-version";
 
 async fn curr_ra_version() -> Option<String> {
+    use tokio::fs::File;
+    use tokio::io::AsyncReadExt;
+
     let mut version_file_path = home::home_dir()?;
     version_file_path.push(RA_VERSION_FILE);
     let mut version_file = File::open(version_file_path).await.ok()?;
@@ -88,6 +101,9 @@ async fn latest_release() -> Result<Release, RaUpdaterError> {
 const RA_ASSET_NAME: &str = "rust-analyzer-x86_64-unknown-linux-gnu.gz";
 
 async fn download_asset(release: &Release) -> Result<PathBuf, RaUpdaterError> {
+    use tokio::fs::File;
+    use tokio::io::AsyncWriteExt;
+
     for asset in &release.assets {
         if asset.name == RA_ASSET_NAME {
             let response = reqwest::get(asset.browser_download_url.clone()).await?;
@@ -100,4 +116,20 @@ async fn download_asset(release: &Release) -> Result<PathBuf, RaUpdaterError> {
         }
     }
     Err(RaUpdaterError::AssetNotFound(RA_ASSET_NAME.to_string()))
+}
+
+fn deflate_asset(asset_path: &Path) -> Result<(), RaUpdaterError> {
+    use std::fs::File;
+    use std::io::BufReader;
+
+    let in_file = File::open(asset_path)?;
+    let buf_read = BufReader::new(in_file);
+    let mut gz = GzDecoder::new(buf_read);
+
+    let out_path = ra_path().ok_or(RaUpdaterError::RaPathNotObtainable)?;
+    let mut out_file = File::create(&out_path)?;
+    std::io::copy(&mut gz, &mut out_file)?;
+
+    // TODO: Set file permissions
+    Ok(())
 }
