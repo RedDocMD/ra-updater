@@ -25,6 +25,8 @@ async fn main() {
             return;
         }
     }
+
+    println!("Downloading rust-analyzer {}", latest_version);
     let asset_path = match download_asset(&latest_release).await {
         Ok(v) => v,
         Err(e) => {
@@ -33,11 +35,18 @@ async fn main() {
         }
     };
 
+    println!("Deflating rust-analyzer {}", latest_version);
     if let Err(err) = deflate_asset(&asset_path) {
         eprintln!(
             "Failed to deflate rust-analyzer to correct location: {}",
             err
         );
+        process::exit(1);
+    }
+
+    println!("Writing version to file");
+    if let Err(err) = write_ra_version(latest_version).await {
+        eprintln!("Failed to write rust-analyzer version to file: {}", err);
         process::exit(1);
     }
 }
@@ -58,6 +67,9 @@ enum RaUpdaterError {
 
     #[error("Rust-analyzer path not obtainable")]
     RaPathNotObtainable,
+
+    #[error("Version file path not obtainable")]
+    VersionFilePathNotObtainable,
 }
 
 const RA_VERSION_FILE: &str = ".ra-version";
@@ -72,6 +84,19 @@ async fn curr_ra_version() -> Option<String> {
     let mut version = String::new();
     version_file.read_to_string(&mut version).await.ok()?;
     Some(version)
+}
+
+async fn write_ra_version(version: &str) -> Result<(), RaUpdaterError> {
+    use tokio::fs::File;
+    use tokio::io::AsyncWriteExt;
+
+    let mut version_file_path =
+        home::home_dir().ok_or(RaUpdaterError::VersionFilePathNotObtainable)?;
+    version_file_path.push(RA_VERSION_FILE);
+    let mut version_file = File::create(version_file_path).await?;
+    version_file.write_all(version.as_bytes()).await?;
+
+    Ok(())
 }
 
 const RA_BIN_NAME: &str = "rust-analyzer";
@@ -121,6 +146,7 @@ async fn download_asset(release: &Release) -> Result<PathBuf, RaUpdaterError> {
 fn deflate_asset(asset_path: &Path) -> Result<(), RaUpdaterError> {
     use std::fs::File;
     use std::io::BufReader;
+    use std::os::unix::prelude::PermissionsExt;
 
     let in_file = File::open(asset_path)?;
     let buf_read = BufReader::new(in_file);
@@ -130,6 +156,10 @@ fn deflate_asset(asset_path: &Path) -> Result<(), RaUpdaterError> {
     let mut out_file = File::create(&out_path)?;
     std::io::copy(&mut gz, &mut out_file)?;
 
-    // TODO: Set file permissions
+    // Set execute permission
+    let mut perms = out_file.metadata()?.permissions();
+    perms.set_mode(0o744);
+    out_file.set_permissions(perms)?;
+
     Ok(())
 }
